@@ -33,5 +33,6 @@
 int freenect_init_registration(freenect_device* dev);
 int freenect_apply_registration(freenect_device* dev, uint8_t* input_packed, uint16_t* output_mm);
 int freenect_apply_depth_to_mm(freenect_device* dev, uint8_t* input_packed, uint16_t* output_mm);
+int freenect_apply_registration_rawdata(freenect_device* dev, uint8_t* input_packed, uint16_t* output);
 
 #endif

@@ -168,6 +168,73 @@ FN_INTERNAL int freenect_apply_registration(freenect_device* dev, uint8_t* input
 	return 0;
 }
 
+FN_INTERNAL int freenect_apply_registration_rawdata(freenect_device* dev, uint8_t* input_packed, uint16_t* output)
+{
+	freenect_registration* reg = &(dev->registration);
+	// set output buffer to zero using pointer-sized memory access (~ 30-40% faster than memset)
+	size_t i, *wipe = (size_t*)output;
+	for (i = 0; i < DEPTH_X_RES * DEPTH_Y_RES * sizeof(uint16_t) / sizeof(size_t); i++) wipe[i] = DEPTH_NO_MM_VALUE;
+
+	uint16_t unpack[8];
+
+	uint32_t target_offset = DEPTH_Y_RES * reg->reg_pad_info.start_lines;
+	uint32_t x,y,source_index = 8;
+
+	for (y = 0; y < DEPTH_Y_RES; y++) {
+		for (x = 0; x < DEPTH_X_RES; x++) {
+
+			// get 8 pixels from the packed frame
+			if (source_index == 8) {
+				unpack_8_pixels( input_packed, unpack );
+				source_index = 0;
+				input_packed += 11;
+			}
+
+			// get the value at the current depth pixel, convert to millimeters
+			uint16_t depth = unpack[source_index++];
+
+			// so long as the current pixel has a depth value
+			if (depth == DEPTH_NO_MM_VALUE) continue;
+			if (depth >= DEPTH_MAX_METRIC_VALUE) continue;
+
+			// calculate the new x and y location for that pixel
+			// using registration_table for the basic rectification
+			// and depth_to_rgb_shift for determining the x shift
+			uint32_t reg_index = DEPTH_MIRROR_X ? ((y + 1) * DEPTH_X_RES - x - 1) : (y * DEPTH_X_RES + x);
+			uint32_t nx = (reg->registration_table[reg_index][0] + reg->depth_to_rgb_shift[depth]) / REG_X_VAL_SCALE;
+			uint32_t ny =  reg->registration_table[reg_index][1];
+
+			// ignore anything outside the image bounds
+			if (nx >= DEPTH_X_RES) continue;
+
+			// convert nx, ny to an index in the depth image array
+			uint32_t target_index = (DEPTH_MIRROR_X ? ((ny + 1) * DEPTH_X_RES - nx - 1) : (ny * DEPTH_X_RES + nx)) - target_offset;
+
+			// get the current value at the new location
+			uint16_t current_depth = output[target_index];
+
+			// make sure the new location is empty, or the new value is closer
+			if ((current_depth == DEPTH_NO_MM_VALUE) || (current_depth > depth)) {
+				output[target_index] = depth; // always save depth at current location
+
+				#ifdef DENSE_REGISTRATION
+					// if we're not on the first row, or the first column
+					if ((nx > 0) && (ny > 0)) {
+						output[target_index - DEPTH_X_RES    ] = depth; // save depth at (x,y-1)
+						output[target_index - DEPTH_X_RES - 1] = depth; // save depth at (x-1,y-1)
+						output[target_index               - 1] = depth; // save depth at (x-1,y)
+					} else if (ny > 0) {
+						output[target_index - DEPTH_X_RES] = depth; // save depth at (x,y-1)
+					} else if (nx > 0) {
+						output[target_index - 1] = depth; // save depth at (x-1,y)
+					}
+				#endif
+			}
+		}
+	}
+	return 0;
+}
+
 // Same as freenect_apply_registration, but don't bother aligning to the RGB image
 FN_INTERNAL int freenect_apply_depth_to_mm(freenect_device* dev, uint8_t* input_packed, uint16_t* output_mm)
 {
